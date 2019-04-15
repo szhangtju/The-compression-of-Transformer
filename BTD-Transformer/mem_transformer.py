@@ -268,25 +268,22 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         rr_head_q = w_head_q + r_r_bias
 
         # tucker decomposition
-        cores = np.zeros([self.d_head, self.d_head, self.d_head])
+        cores = torch.zeros([self.d_head, self.d_head, self.d_head]).cuda()
         for i in range(8):
             cores[i][i][i] = 1
-        cores = tl.tensor(cores)
 
         # print(r_head_k.size())
 
-        factor_k_2 = tl.tensor(r_head_k.view(qlen, self.n_head * self.d_head).cpu().detach().numpy())
+        factor_k_2 = r_head_k.view(qlen, self.n_head * self.d_head)
         full_matrixs = []
         for i in range(bsz):
-            factor_q_1 = tl.tensor(rw_head_q[:, i, :, :].view(qlen, self.n_head*self.d_head).cpu().detach().numpy())
-            factor_k = tl.tensor(w_head_k[:, i, :, :].view(qlen, self.n_head*self.d_head).cpu().detach().numpy())
-            factor_v = tl.tensor(w_head_v[:, i, :, :].view(qlen, self.n_head*self.d_head).cpu().detach().numpy())
-            full_matrix_1 = tl.tucker_to_tensor(cores, (factor_q_1, factor_k, factor_v))
-            full_matrix_1 = torch.from_numpy(full_matrix_1).contiguous().view(qlen, -1)
+            factor_q_1 = rw_head_q[:, i, :, :].view(qlen, self.n_head*self.d_head)
+            factor_k = w_head_k[:, i, :, :].view(qlen, self.n_head*self.d_head)
+            factor_v = w_head_v[:, i, :, :].view(qlen, self.n_head*self.d_head)
+            full_matrix_1 = torch.einsum('pqr, ip,jq,kr->ijk', [cores, factor_q_1, factor_k, factor_v]).contiguous().view(qlen, -1)
 
-            factor_q_2 = tl.tensor(rr_head_q[:, i, :, :].view(qlen, self.n_head * self.d_head).cpu().detach().numpy())
-            full_matrix_2 = tl.tucker_to_tensor(cores, (factor_q_2, factor_k_2, factor_v))
-            full_matrix_2 = torch.from_numpy(full_matrix_2).contiguous().view(qlen, -1)
+            factor_q_2 = rr_head_q[:, i, :, :].view(qlen, self.n_head * self.d_head)
+            full_matrix_2 = torch.einsum('pqr, ip,jq,kr->ijk', [cores, factor_q_2, factor_k_2, factor_v]).contiguous().view(qlen, -1)
 
             full_matrixs.append(full_matrix_1 + full_matrix_2)
 
