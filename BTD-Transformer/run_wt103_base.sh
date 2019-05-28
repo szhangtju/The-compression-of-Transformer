@@ -7,12 +7,12 @@ if [[ $1 == 'train' ]]; then
         --data ../data/wiki-103/ \
         --dataset wt103 \
         --adaptive \
-        --n_layer 16 \
-        --d_model 410 \
-        --n_head 10 \
-        --d_head 41 \
+        --n_layer 12 \
+        --d_model 512 \
+        --n_head 1 \
+        --d_head 40 \
         --d_inner 2100 \
-        --dropout 0.1 \
+        --dropout 0.3 \
         --dropatt 0.0 \
         --optim adam \
         --lr 0.00025 \

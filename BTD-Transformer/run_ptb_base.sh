@@ -6,9 +6,9 @@ if [ $1 == 'train' ]; then
         --cuda \
         --data ../data/ptb/ \
         --dataset ptb \
-        --n_layer 12 \
+        --n_layer 3 \
         --d_model 512 \
-        --n_head 8 \
+        --n_head 1 \
         --d_head 40 \
         --d_inner 2100 \
         --dropout 0.1 \
@@ -16,7 +16,7 @@ if [ $1 == 'train' ]; then
         --optim adam \
         --lr 0.00025 \
         --warmup_step 0 \
-        --max_step 2000 \
+        --max_step 20000 \
         --tgt_len 32 \
         --mem_len 32 \
         --eval_tgt_len 32 \

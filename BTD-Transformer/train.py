@@ -17,10 +17,10 @@ from utils.exp_utils import create_exp_dir
 from utils.data_parallel import BalancedDataParallel
 
 parser = argparse.ArgumentParser(description='PyTorch Transformer Language Model')
-parser.add_argument('--data', type=str, default='data/wiki-103',
+parser.add_argument('--data', type=str, default='data/ptb',
                     help='location of the data corpus')
-parser.add_argument('--dataset', type=str, default='wt103',
-                    choices=['wt103', 'lm1b', 'enwik8', 'text8', 'ptb'],
+parser.add_argument('--dataset', type=str, default='ptb ',
+                    choices=['wt103', 'lm1b', 'enwik8', 'text8', 'ptb', 'wt2'],
                     help='dataset name')
 parser.add_argument('--n_layer', type=int, default=12,
                     help='number of total layers')
@@ -70,7 +70,7 @@ parser.add_argument('--clip', type=float, default=0.25,
                     help='gradient clipping')
 parser.add_argument('--clip_nonemb', action='store_true',
                     help='only clip the gradient of non-embedding params')
-parser.add_argument('--max_step', type=int, default=200000,
+parser.add_argument('--max_step', type=int, default=300000,
                     help='upper epoch limit')
 parser.add_argument('--batch_size', type=int, default=60,
                     help='batch size')
@@ -108,7 +108,7 @@ parser.add_argument('--work_dir', default='LM-TFM', type=str,
                     help='experiment directory.')
 parser.add_argument('--restart', action='store_true',
                     help='restart training from the saved checkpoint')
-parser.add_argument('--restart_dir', type=str, default='',
+parser.add_argument('--restart_dir', type=str, default='LM-TFM-wt103/20190503-133155',
                     help='restart dir')
 parser.add_argument('--debug', action='store_true',
                     help='run in debug mode (do not create exp dir)')
@@ -183,6 +183,7 @@ device = torch.device('cuda' if args.cuda else 'cpu')
 ###############################################################################
 corpus = get_lm_corpus(args.data, args.dataset)
 ntokens = len(corpus.vocab)
+print("ntokens:", ntokens)
 args.n_token = ntokens
 
 eval_batch_size = 10
@@ -212,10 +213,12 @@ def init_weight(weight):
     if args.init == 'uniform':
         nn.init.uniform_(weight, -args.init_range, args.init_range)
     elif args.init == 'normal':
+        # 0.02 N
         nn.init.normal_(weight, 0.0, args.init_std)
 
 
 def init_bias(bias):
+    # constant
     nn.init.constant_(bias, 0.0)
 
 
@@ -289,8 +292,9 @@ else:
     model.apply(weights_init)
     model.word_emb.apply(weights_init)  # ensure embedding init is not overridden by out_layer in case of weight sharing
 args.n_all_param = sum([p.nelement() for p in model.parameters()])
-for p in model.layers.parameters():
-    print(p)
+
+# for p in model.layers.parameters():
+#     print(p)
 args.n_nonemb_param = sum([p.nelement() for p in model.layers.parameters()])
 
 if args.fp16:
@@ -305,6 +309,7 @@ if args.multi_gpu:
         para_model = nn.DataParallel(model, dim=1).to(device)
 else:
     para_model = model.to(device)
+
 
 #### optimizer
 if args.optim.lower() == 'sgd':
@@ -334,6 +339,7 @@ elif args.optim.lower() == 'adam':
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
 elif args.optim.lower() == 'adagrad':
     optimizer = optim.Adagrad(model.parameters(), lr=args.lr)
+
 
 #### scheduler
 if args.scheduler == 'cosine':
@@ -437,7 +443,9 @@ def train():
         mems = [tuple() for _ in range(args.batch_chunk)]
     else:
         mems = tuple()
+
     train_iter = tr_iter.get_varlen_iter() if args.varlen else tr_iter
+
     for batch, (data, target, seq_len) in enumerate(train_iter):
         model.zero_grad()
         if args.batch_chunk > 1:
