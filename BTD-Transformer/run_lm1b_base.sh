@@ -10,7 +10,7 @@ if [[ $1 == 'train' ]]; then
         --n_layer 18 \
         --d_model 1024 \
         --div_val 4 \
-        --n_head 8 \
+        --n_head 1 \
         --d_head 128 \
         --d_inner 4096 \
         --dropout 0.0 \

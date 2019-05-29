@@ -8,7 +8,7 @@ if [[ $1 == 'train' ]]; then
         --dataset enwik8 \
         --n_layer 24 \
         --d_model 1024 \
-        --n_head 8 \
+        --n_head 1 \
         --d_head 128 \
         --d_inner 3072 \
         --dropout 0.15 \
