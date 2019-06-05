@@ -1,6 +1,6 @@
 ## Introduction
 
-This directory contains our pytorch implementation of Transformer-XL(https://github.com/kimiyoung/transformer-xl). Note that our state-of-the-art results reported in the paper were obtained by training the model on a large-scale TPU cluster, and our pytorch codebase currently does not support distributed training. Here we provide two sets of hyperparameters and scripts:
+This directory contains our pytorch implementation of Transformer-XL. Note that our state-of-the-art results reported in the paper were obtained by training the model on a large-scale TPU cluster, and our pytorch codebase currently does not support distributed training. Here we provide two sets of hyperparameters and scripts:
 - `*large.sh` are for the SoTA setting with large models which might not be directly runnable on a local GPU machine.
 - `*base.sh` are for the base models which can be run on a few GPUs.
 
@@ -18,17 +18,17 @@ The pytorch implementation produces similar results to the TF codebase under the
 
 ## Training and Evaluation
 
-#### Replicate the "ppl =54.25" result on `PTB` with a 3-layer Transformer-XL
+#### Replicate the "bpc = 1.06" result on `enwik8` with a 12-layer Transformer-XL
 
-- Make sure the machine have **at least 11G memory**
+- Make sure the machine have **4 GPUs**, each with **at least 11G memory**
 
 - Training
 
-  `bash run_ptb_base.sh train --work_dir PATH_TO_WORK_DIR`
-  
+  `bash run_enwik8_base.sh train --work_dir PATH_TO_WORK_DIR`
+
 - Evaluation
 
-  `bash run_ptb_base.sh eval --work_dir PATH_TO_WORK_DIR`
+  `bash run_enwik8_base.sh eval --work_dir PATH_TO_WORK_DIR`
 
 
 
@@ -60,5 +60,5 @@ The pytorch implementation produces similar results to the TF codebase under the
 
 - `Text8` character-level language modeling: check out `run_text8_base.sh`
 - `lm1b` word-level language modeling: check out `run_lm1b_base.sh`
-python train.py --cuda --adaptive --n_layer 12 --d_model 410 --n_head 1 --d_head 40 --d_inner 2100 --tgt_len 30 --mem_len 30  --eval_tgt_len 30  --batch_size 60 --gpu0_bsz 1
+python train.py --cuda --adaptive --n_layer 12 --d_model 410 --n_head 8 --d_head 40 --d_inner 2100 --tgt_len 30 --mem_len 30  --eval_tgt_len 30  --batch_size 60 --gpu0_bsz 1
 python train.py --cuda --adaptive --n_layer 12 --d_model 410 --n_head 1 --d_head 40 --d_inner 2100 --tgt_len 30 --mem_len 30  --eval_tgt_len 30  --batch_size 60 --gpu0_bsz 1
