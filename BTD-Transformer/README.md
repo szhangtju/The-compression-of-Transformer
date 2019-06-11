@@ -1,6 +1,6 @@
 ## Introduction
 
-This directory contains our pytorch implementation of Transformer-XL. Note that our state-of-the-art results reported in the paper were obtained by training the model on a large-scale TPU cluster, and our pytorch codebase currently does not support distributed training. Here we provide two sets of hyperparameters and scripts:
+This directory contains our pytorch implementation of Transformer-XL.The code validates our ideas on the basis of https://github.com/kimiyoung/transformer-xl. Note that our state-of-the-art results reported in the paper were obtained by training the model on a large-scale TPU cluster, and our pytorch codebase currently does not support distributed training. Here we provide two sets of hyperparameters and scripts:
 - `*large.sh` are for the SoTA setting with large models which might not be directly runnable on a local GPU machine.
 - `*base.sh` are for the base models which can be run on a few GPUs.
 
