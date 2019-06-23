@@ -239,10 +239,10 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         return output
 
 
-class RelPartialLearnableDecoderLayer(nn.Module):
+class RelPartialLearnableEncoderLayer(nn.Module):
     def __init__(self, n_head, d_model, d_head, d_inner, dropout,
                  **kwargs):
-        super(RelPartialLearnableDecoderLayer, self).__init__()
+        super(RelPartialLearnableEncoderLayer, self).__init__()
 
         self.dec_attn = RelPartialLearnableMultiHeadAttn(n_head, d_model,
                                                          d_head, dropout, **kwargs)
@@ -365,7 +365,7 @@ class MemTransformerLM(nn.Module):
         if attn_type == 0:  # the default attention
             for i in range(n_layer):
                 self.layers.append(
-                    RelPartialLearnableDecoderLayer(
+                    RelPartialLearnableEncoderLayer(
                         n_head, d_model, d_head, d_inner, dropout,
                         tgt_len=tgt_len, ext_len=ext_len, mem_len=mem_len,
                         dropatt=dropatt, pre_lnorm=pre_lnorm)
@@ -500,57 +500,6 @@ class MemTransformerLM(nn.Module):
                 mems_i = None if mems is None else mems[i]
                 core_out = layer(core_out, pos_emb, self.r_w_bias,
                                  self.r_r_bias, dec_attn_mask=dec_attn_mask, mems=mems_i)
-                hids.append(core_out)
-        elif self.attn_type == 1:  # learnable
-            core_out = self.drop(word_emb)
-            hids.append(core_out)
-            for i, layer in enumerate(self.layers):
-                if self.clamp_len > 0:
-                    r_emb = self.r_emb[i][-self.clamp_len:]
-                    r_bias = self.r_bias[i][-self.clamp_len:]
-                else:
-                    r_emb, r_bias = self.r_emb[i], self.r_bias[i]
-
-                mems_i = None if mems is None else mems[i]
-                core_out = layer(core_out, r_emb, self.r_w_bias[i],
-                                 r_bias, dec_attn_mask=dec_attn_mask, mems=mems_i)
-                hids.append(core_out)
-        elif self.attn_type == 2:  # absolute
-            pos_seq = torch.arange(klen - 1, -1, -1.0, device=word_emb.device,
-                                   dtype=word_emb.dtype)
-            if self.clamp_len > 0:
-                pos_seq.clamp_(max=self.clamp_len)
-            pos_emb = self.pos_emb(pos_seq)
-
-            core_out = self.drop(word_emb + pos_emb[-qlen:])
-
-            hids.append(core_out)
-            for i, layer in enumerate(self.layers):
-                mems_i = None if mems is None else mems[i]
-                if mems_i is not None and i == 0:
-                    mems_i += pos_emb[:mlen]
-                core_out = layer(core_out, dec_attn_mask=dec_attn_mask,
-                                 mems=mems_i)
-                hids.append(core_out)
-        elif self.attn_type == 3:
-            core_out = self.drop(word_emb)
-
-            hids.append(core_out)
-            for i, layer in enumerate(self.layers):
-                mems_i = None if mems is None else mems[i]
-                if mems_i is not None and mlen > 0:
-                    cur_emb = self.r_emb[i][:-qlen]
-                    cur_size = cur_emb.size(0)
-                    if cur_size < mlen:
-                        cur_emb_pad = cur_emb[0:1].expand(mlen - cur_size, -1, -1)
-                        cur_emb = torch.cat([cur_emb_pad, cur_emb], 0)
-                    else:
-                        cur_emb = cur_emb[-mlen:]
-                    mems_i += cur_emb.view(mlen, 1, -1)
-                core_out += self.r_emb[i][-qlen:].view(qlen, 1, -1)
-
-                core_out = layer(core_out, dec_attn_mask=dec_attn_mask,
-                                 mems=mems_i)
                 hids.append(core_out)
 
         core_out = self.drop(core_out)
