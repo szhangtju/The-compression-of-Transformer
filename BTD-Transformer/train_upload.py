@@ -1,4 +1,3 @@
-# copy from https://github.com/kimiyoung/transformer-xl
 # coding: utf-8
 import argparse
 import time
@@ -13,15 +12,15 @@ import torch.nn as nn
 import torch.optim as optim
 
 from data_utils import get_lm_corpus
-from mem_transformer import MemTransformerLM
+from transformer_upload import TensorizedTransformerLM
 from utils.exp_utils import create_exp_dir
 from utils.data_parallel import BalancedDataParallel
 
 parser = argparse.ArgumentParser(description='PyTorch Transformer Language Model')
 parser.add_argument('--data', type=str, default='data/ptb',
                     help='location of the data corpus')
-parser.add_argument('--dataset', type=str, default='ptb ',
-                    choices=['wt103', 'lm1b', 'enwik8', 'text8', 'ptb', 'wt2'],
+parser.add_argument('--dataset', type=str, default='ptb',
+                    choices=['wt103', 'lm1b', 'enwik8', 'text8', 'ptb'],
                     help='dataset name')
 parser.add_argument('--n_layer', type=int, default=12,
                     help='number of total layers')
@@ -71,7 +70,7 @@ parser.add_argument('--clip', type=float, default=0.25,
                     help='gradient clipping')
 parser.add_argument('--clip_nonemb', action='store_true',
                     help='only clip the gradient of non-embedding params')
-parser.add_argument('--max_step', type=int, default=300000,
+parser.add_argument('--max_step', type=int, default=200000,
                     help='upper epoch limit')
 parser.add_argument('--batch_size', type=int, default=60,
                     help='batch size')
@@ -103,13 +102,13 @@ parser.add_argument('--multi_gpu', action='store_true',
                     help='use multiple GPU')
 parser.add_argument('--log-interval', type=int, default=200,
                     help='report interval')
-parser.add_argument('--eval-interval', type=int, default=4000,
+parser.add_argument('--eval-interval', type=int, default=1000,
                     help='evaluation interval')
 parser.add_argument('--work_dir', default='LM-TFM', type=str,
                     help='experiment directory.')
 parser.add_argument('--restart', action='store_true',
                     help='restart training from the saved checkpoint')
-parser.add_argument('--restart_dir', type=str, default='LM-TFM-wt103/20190503-133155',
+parser.add_argument('--restart_dir', type=str, default='',
                     help='restart dir')
 parser.add_argument('--debug', action='store_true',
                     help='run in debug mode (do not create exp dir)')
@@ -154,11 +153,12 @@ assert args.batch_size % args.batch_chunk == 0
 args.work_dir = '{}-{}'.format(args.work_dir, args.dataset)
 args.work_dir = os.path.join(args.work_dir, time.strftime('%Y%m%d-%H%M%S'))
 logging = create_exp_dir(args.work_dir,
-                         scripts_to_save=['train.py', 'mem_transformer.py'], debug=args.debug)
+                         scripts_to_save=['train_zs.py', 'mem_transformer_zs.py'], debug=args.debug)
 
 # Set the random seed manually for reproducibility.
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
+torch.cuda.set_device(1)
 if torch.cuda.is_available():
     if not args.cuda:
         print('WARNING: You have a CUDA device, so you should probably run with --cuda')
@@ -184,7 +184,6 @@ device = torch.device('cuda' if args.cuda else 'cpu')
 ###############################################################################
 corpus = get_lm_corpus(args.data, args.dataset)
 ntokens = len(corpus.vocab)
-print("ntokens:", ntokens)
 args.n_token = ntokens
 
 eval_batch_size = 10
@@ -214,12 +213,10 @@ def init_weight(weight):
     if args.init == 'uniform':
         nn.init.uniform_(weight, -args.init_range, args.init_range)
     elif args.init == 'normal':
-        # 0.02 N
         nn.init.normal_(weight, 0.0, args.init_std)
 
 
 def init_bias(bias):
-    # constant
     nn.init.constant_(bias, 0.0)
 
 
@@ -230,6 +227,12 @@ def weights_init(m):
             init_weight(m.weight)
         if hasattr(m, 'bias') and m.bias is not None:
             init_bias(m.bias)
+
+    # 初始化
+    elif classname.find('MultiHeadAttn') != -1:
+        if hasattr(m, 'core_value'):
+            nn.init.normal_(m.core_value, 0.0, args.proj_init_std)
+
     elif classname.find('AdaptiveEmbedding') != -1:
         if hasattr(m, 'emb_projs'):
             for i in range(len(m.emb_projs)):
@@ -283,7 +286,7 @@ if args.restart:
     model.apply(update_dropout)
     model.apply(update_dropatt)
 else:
-    model = MemTransformerLM(ntokens, args.n_layer, args.n_head, args.d_model,
+    model = TensorizedTransformerLM(ntokens, args.n_layer, args.n_head, args.d_model,
                              args.d_head, args.d_inner, args.dropout, args.dropatt,
                              tie_weight=args.tied, d_embed=args.d_embed, div_val=args.div_val,
                              tie_projs=tie_projs, pre_lnorm=args.pre_lnorm, tgt_len=args.tgt_len,
@@ -293,11 +296,15 @@ else:
     model.apply(weights_init)
     model.word_emb.apply(weights_init)  # ensure embedding init is not overridden by out_layer in case of weight sharing
 args.n_all_param = sum([p.nelement() for p in model.parameters()])
-
-# for p in model.layers.parameters():
-#     print(p)
 args.n_nonemb_param = sum([p.nelement() for p in model.layers.parameters()])
 
+self_attention_param = 0
+for p in model.layers:
+    for a in p.dec_attn.parameters():
+        self_attention_param += a.nelement()
+        # print(a.size())
+args.self_attention_param = self_attention_param
+# exit(0)
 if args.fp16:
     model = model.half()
 
@@ -310,7 +317,6 @@ if args.multi_gpu:
         para_model = nn.DataParallel(model, dim=1).to(device)
 else:
     para_model = model.to(device)
-
 
 #### optimizer
 if args.optim.lower() == 'sgd':
@@ -340,7 +346,6 @@ elif args.optim.lower() == 'adam':
         optimizer = optim.Adam(model.parameters(), lr=args.lr)
 elif args.optim.lower() == 'adagrad':
     optimizer = optim.Adagrad(model.parameters(), lr=args.lr)
-
 
 #### scheduler
 if args.scheduler == 'cosine':
@@ -397,6 +402,7 @@ for k, v in args.__dict__.items():
 logging('=' * 100)
 logging('#params = {}'.format(args.n_all_param))
 logging('#non emb params = {}'.format(args.n_nonemb_param))
+logging('#self attention params = {}'.format(args.self_attention_param))
 
 
 ###############################################################################
@@ -444,9 +450,7 @@ def train():
         mems = [tuple() for _ in range(args.batch_chunk)]
     else:
         mems = tuple()
-
     train_iter = tr_iter.get_varlen_iter() if args.varlen else tr_iter
-
     for batch, (data, target, seq_len) in enumerate(train_iter):
         model.zero_grad()
         if args.batch_chunk > 1:

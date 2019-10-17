@@ -7,6 +7,7 @@ import torch
 
 from utils.vocabulary import Vocab
 
+
 class LMOrderedIterator(object):
     def __init__(self, data, bsz, bptt, device='cpu', ext_len=None):
         """
@@ -22,6 +23,7 @@ class LMOrderedIterator(object):
         self.n_step = data.size(0) // bsz
 
         # Trim off any extra elements that wouldn't cleanly fit (remainders).
+        # dimension*, *start*, *length*
         data = data.narrow(0, 0, self.n_step * bsz)
 
         # Evenly divide the data across the bsz batches.
@@ -38,12 +40,12 @@ class LMOrderedIterator(object):
         beg_idx = max(0, i - self.ext_len)
 
         data = self.data[beg_idx:end_idx]
-        target = self.data[i+1:i+1+seq_len]
+        target = self.data[i + 1:i + 1 + seq_len]
 
         return data, target, seq_len
 
     def get_fixlen_iter(self, start=0):
-        for i in range(start, self.data.size(0) - 1, self.bptt):
+        for i in range(start, self.data.size(0) - self.bptt, self.bptt):
             yield self.get_batch(i)
 
     def get_varlen_iter(self, start=0, std=5, min_len=5, max_deviation=3):
@@ -111,10 +113,10 @@ class LMShuffledIterator(object):
                         # number of new tokens to fill in
                         n_new = min(len(streams[i]) - 1, self.bptt - n_filled)
                         # first n_retain tokens are retained from last batch
-                        data[n_retain+n_filled:n_retain+n_filled+n_new, i] = \
+                        data[n_retain + n_filled:n_retain + n_filled + n_new, i] = \
                             streams[i][:n_new]
-                        target[n_filled:n_filled+n_new, i] = \
-                            streams[i][1:n_new+1]
+                        target[n_filled:n_filled + n_new, i] = \
+                            streams[i][1:n_new + 1]
                         streams[i] = streams[i][n_new:]
                         n_filled += n_new
                 except StopIteration:
@@ -144,7 +146,7 @@ class LMShuffledIterator(object):
 
 class LMMultiFileIterator(LMShuffledIterator):
     def __init__(self, paths, vocab, bsz, bptt, device='cpu', ext_len=None,
-        shuffle=False):
+                 shuffle=False):
 
         self.paths = paths
         self.vocab = vocab
@@ -187,6 +189,7 @@ class Corpus(object):
         elif self.dataset == 'wt103':
             self.vocab.count_file(os.path.join(path, 'train.txt'))
         elif self.dataset == 'lm1b':
+
             train_path_pattern = os.path.join(
                 path, '1-billion-word-language-modeling-benchmark-r13output',
                 'training-monolingual.tokenized.shuffled', 'news.en-*')
@@ -198,25 +201,34 @@ class Corpus(object):
         if self.dataset in ['ptb', 'wt2', 'wt103']:
             self.train = self.vocab.encode_file(
                 os.path.join(path, 'train.txt'), ordered=True)
+            # print(self.train.size())
             self.valid = self.vocab.encode_file(
                 os.path.join(path, 'valid.txt'), ordered=True)
-            self.test  = self.vocab.encode_file(
+            self.test = self.vocab.encode_file(
                 os.path.join(path, 'test.txt'), ordered=True)
+            # print(self.test.size())
         elif self.dataset in ['enwik8', 'text8']:
             self.train = self.vocab.encode_file(
                 os.path.join(path, 'train.txt'), ordered=True, add_eos=False)
             self.valid = self.vocab.encode_file(
                 os.path.join(path, 'valid.txt'), ordered=True, add_eos=False)
-            self.test  = self.vocab.encode_file(
+            self.test = self.vocab.encode_file(
                 os.path.join(path, 'test.txt'), ordered=True, add_eos=False)
         elif self.dataset == 'lm1b':
             self.train = train_paths
-            self.valid = self.vocab.encode_file(
-                os.path.join(path, 'valid.txt'), ordered=False, add_double_eos=True)
-            self.test  = self.vocab.encode_file(
-                os.path.join(path, 'test.txt'), ordered=False, add_double_eos=True)
+            vaild_path_pattern = os.path.join(
+                path, '1-billion-word-language-modeling-benchmark-r13output',
+                'heldout-monolingual.tokenized.shuffled', 'news.en.heldout*')
+            self.valid = glob.glob(vaild_path_pattern)
+            # print(vaild_path_pattern)
+            self.test = self.valid
+            # self.valid = self.vocab.encode_file(
+            #     os.path.join(path, 'valid.txt'), ordered=False, add_double_eos=True)
+            # self.test = self.vocab.encode_file(
+            #     os.path.join(path, 'test.txt'), ordered=False, add_double_eos=True)
 
     def get_iterator(self, split, *args, **kwargs):
+        data_iter = None
         if split == 'train':
             if self.dataset in ['ptb', 'wt2', 'wt103', 'enwik8', 'text8']:
                 data_iter = LMOrderedIterator(self.train, *args, **kwargs)
@@ -228,8 +240,8 @@ class Corpus(object):
             if self.dataset in ['ptb', 'wt2', 'wt103', 'enwik8', 'text8']:
                 data_iter = LMOrderedIterator(data, *args, **kwargs)
             elif self.dataset == 'lm1b':
-                data_iter = LMShuffledIterator(data, *args, **kwargs)
-
+                # data_iter = LMShuffledIterator(data, *args, **kwargs)
+                data_iter = LMMultiFileIterator(data, self.vocab, *args, **kwargs)
         return data_iter
 
 
@@ -250,7 +262,7 @@ def get_lm_corpus(datadir, dataset):
         elif dataset == 'lm1b':
             kwargs['special'] = []
             kwargs['lower_case'] = False
-            kwargs['vocab_file'] = os.path.join(datadir, '1b_word_vocab.txt')
+            kwargs['vocab_file'] = os.path.join(datadir, 'vocab-2016-09-10.txt')
         elif dataset in ['enwik8', 'text8']:
             pass
 
@@ -262,6 +274,7 @@ def get_lm_corpus(datadir, dataset):
 
 if __name__ == '__main__':
     import argparse
+
     parser = argparse.ArgumentParser(description='unit test')
     parser.add_argument('--datadir', type=str, default='data/ptb',
                         help='location of the data corpus')

@@ -52,38 +52,43 @@ class PositionwiseFF(nn.Module):
 
     def forward(self, inp):
         if self.pre_lnorm:
-            ##### layer normalization + positionwise feed-forward
+            # layer normalization + positionwise feed-forward
             core_out = self.CoreNet(self.layer_norm(inp))
 
-            ##### residual connection
+            # residual connection
             output = core_out + inp
         else:
-            ##### positionwise feed-forward
+            # positionwise feed-forward
             core_out = self.CoreNet(inp)
 
-            ##### residual connection + layer normalization
+            # residual connection + layer normalization
             output = self.layer_norm(inp + core_out)
 
         return output
 
 
-class RelMultiHeadAttn(nn.Module):
+class MultiLinearAttn(nn.Module):
     def __init__(self, n_head, d_model, d_head, dropout, dropatt=0,
-                 tgt_len=30, ext_len=None, mem_len=None, pre_lnorm=False):
-        super(RelMultiHeadAttn, self).__init__()
+                 tgt_len=30, ext_len=None, mem_len=None, pre_lnorm=False, rand=None, core_nums=1):
+        super(MultiLinearAttn, self).__init__()
 
         self.n_head = n_head
         self.d_model = d_model
         self.d_head = d_head
         self.dropout = dropout
+        self.R = self.d_head if rand is None else rand
+        self.core_nums = core_nums
 
         self.qkv_net = nn.Linear(d_model, 3 * n_head * d_head, bias=False)
 
         self.drop = nn.Dropout(dropout)
         self.dropatt = nn.Dropout(dropatt)
 
-        self.o_net = nn.Linear(tgt_len * tgt_len, d_model, bias=False)
-        # self.o_net_1 = nn.Linear(13 * 13, d_model, bias=False)
+        # memory
+        mem_tar_len = tgt_len + mem_len
+
+        self.o_net = nn.Linear(mem_tar_len * mem_tar_len, d_model, bias=False)
+        self.core_value = nn.Parameter(F.softmax(torch.FloatTensor(self.core_nums, self.R), dim=-1), requires_grad=True)
 
         self.layer_norm = nn.LayerNorm(d_model)
 
@@ -139,9 +144,9 @@ class RelMultiHeadAttn(nn.Module):
         raise NotImplementedError
 
 
-class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
+class BlockTensorAttn(MultiLinearAttn):
     def __init__(self, *args, **kwargs):
-        super(RelPartialLearnableMultiHeadAttn, self).__init__(*args, **kwargs)
+        super(BlockTensorAttn, self).__init__(*args, **kwargs)
 
         self.r_net = nn.Linear(self.d_model, self.n_head * self.d_head, bias=False)
 
@@ -159,73 +164,41 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
             w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
 
             w_head_q = w_head_q[-qlen:]
-            w_head_k = w_head_k[-qlen:]
-            w_head_v = w_head_v[-qlen:]
-            r_head_k = r_head_k[-qlen:]
+
         else:
             if self.pre_lnorm:
                 w_heads = self.qkv_net(self.layer_norm(w))
             else:
                 w_heads = self.qkv_net(w)
             r_head_k = self.r_net(r)
-            # r_head_k = r_head_k[-qlen:]
 
             w_head_q, w_head_k, w_head_v = torch.chunk(w_heads, 3, dim=-1)
 
         klen = w_head_k.size(0)
 
-        w_head_q = w_head_q.view(qlen, bsz, self.n_head, self.d_head)  # qlen x bsz x n_head x d_head
-        w_head_k = w_head_k.view(klen, bsz, self.n_head, self.d_head)  # klen x bsz x n_head x d_head
-        w_head_v = w_head_v.view(klen, bsz, self.n_head, self.d_head)  # klen x bsz x n_head x d_head
+        w_head_q = w_head_q.view(qlen, bsz, self.n_head*self.d_head)  # qlen x bsz x n_head x d_head
+        w_head_k = w_head_k.view(klen, bsz, self.n_head*self.d_head)  # klen x bsz x n_head x d_head
+        w_head_v = w_head_v.view(klen, bsz, self.n_head*self.d_head)  # klen x bsz x n_head x d_head
 
-        r_head_k = r_head_k.view(klen, self.n_head, self.d_head)  # qlen x n_head x d_head
+        r_head_k = r_head_k.view(rlen, self.n_head*self.d_head)  # qlen x n_head x d_head
 
         rw_head_q = w_head_q + r_w_bias  # qlen x bsz x n_head x d_head
         rr_head_q = w_head_q + r_r_bias
 
-        cores_1 = torch.zeros([self.d_head, self.d_head, self.d_head]).cuda()
-        # cores_2 = torch.zeros([self.d_head, self.d_head, self.d_head]).cuda()
-        # cores_3 = torch.zeros([self.d_head, self.d_head, self.d_head]).cuda()
-        for i in range(self.d_head):
-            cores_1[i][i][i] = initCore[0][i]
-            # cores_2[i][i][i] = initCore[1][i]
-            # cores_3[i][i][i] = initCore[2][i]
+        full_matrixs = 0
+        for i in range(self.core_nums):
+            full_matrix_1 = torch.einsum('h, ibh,jbh,kbh->ibjk',
+                                         [self.core_value[i], rw_head_q, w_head_k, w_head_v]).contiguous().view(qlen, bsz, -1)
 
-            # cores_1[i][i][i] = initCore[0][i]
+            full_matrix_2 = torch.einsum('h, ibh,jh,kbh->ibjk',
+                                         [self.core_value[i], rr_head_q, r_head_k, w_head_v]).contiguous().view(qlen, bsz, -1)
 
-        factor_k_2 = r_head_k.view(qlen, self.n_head * self.d_head)
-        full_matrixs = []
-        for i in range(bsz):
-            factor_q_1 = rw_head_q[:, i, :, :].view(qlen, self.n_head * self.d_head)
-            factor_k = w_head_k[:, i, :, :].view(qlen, self.n_head * self.d_head)
-            factor_v = w_head_v[:, i, :, :].view(qlen, self.n_head * self.d_head)
-            full_matrix_1 = torch.einsum('pqr, ip,jq,kr->ijk',
-                                         [cores_1, factor_q_1, factor_k, factor_v]).contiguous().view(qlen, -1)
-
-            factor_q_2 = rr_head_q[:, i, :, :].view(qlen, self.n_head * self.d_head)
-            full_matrix_2 = torch.einsum('pqr, ip,jq,kr->ijk',
-                                         [cores_1, factor_q_2, factor_k_2, factor_v]).contiguous().view(qlen, -1)
-            full_matrixs.append(full_matrix_1 + full_matrix_2)
-
-            # full_matrix_3 = torch.einsum('pqr, ip,jq,kr->ijk',
-            #                              [cores_2, factor_q_1, factor_k, factor_v]).contiguous().view(qlen, -1)
-            # full_matrix_4 = torch.einsum('pqr, ip,jq,kr->ijk',
-            #                              [cores_2, factor_q_2, factor_k_2, factor_v]).contiguous().view(qlen, -1)
-            # full_matrixs.append(
-            #     full_matrix_1 + full_matrix_2 + full_matrix_3 + full_matrix_4)
-
-            # full_matrix_5 = torch.einsum('pqr, ip,jq,kr->ijk',
-            #                              [cores_3, factor_q_1, factor_k, factor_v]).contiguous().view(qlen, -1)
-            # full_matrix_6 = torch.einsum('pqr, ip,jq,kr->ijk',
-            #                              [cores_3, factor_q_2, factor_k_2, factor_v]).contiguous().view(qlen, -1)
-            #
-            # full_matrixs.append(full_matrix_1 + full_matrix_2 + full_matrix_3 + full_matrix_4 + full_matrix_5 + full_matrix_6)
+            full_matrixs += (full_matrix_1 + full_matrix_2)
 
         # linear projection
-        attn_vec = torch.stack(full_matrixs).permute(1, 0, 2).cuda().float()
-        # attn_vec.mul_(0.5)
+        full_matrixs.mul_(1/self.core_nums)
 
-        attn_out = self.o_net(attn_vec)
+        attn_out = self.o_net(full_matrixs)
 
         attn_out = self.drop(attn_out)
 
@@ -239,13 +212,12 @@ class RelPartialLearnableMultiHeadAttn(RelMultiHeadAttn):
         return output
 
 
-class RelPartialLearnableEncoderLayer(nn.Module):
+class TensorizedDecoderLayer(nn.Module):
     def __init__(self, n_head, d_model, d_head, d_inner, dropout,
                  **kwargs):
-        super(RelPartialLearnableEncoderLayer, self).__init__()
+        super(TensorizedDecoderLayer, self).__init__()
 
-        self.dec_attn = RelPartialLearnableMultiHeadAttn(n_head, d_model,
-                                                         d_head, dropout, **kwargs)
+        self.dec_attn = BlockTensorAttn(n_head, d_model, d_head, dropout, **kwargs)
         self.pos_ff = PositionwiseFF(d_model, d_inner, dropout,
                                      pre_lnorm=kwargs.get('pre_lnorm'))
 
@@ -322,7 +294,7 @@ class AdaptiveEmbedding(nn.Module):
         return embed
 
 
-class MemTransformerLM(nn.Module):
+class TensorizedTransformerLM(nn.Module):
     def __init__(self, n_token, n_layer, n_head, d_model, d_head, d_inner,
                  dropout, dropatt, tie_weight=True, d_embed=None,
                  div_val=1, tie_projs=[False], pre_lnorm=False,
@@ -330,16 +302,8 @@ class MemTransformerLM(nn.Module):
                  cutoffs=[], adapt_inp=False,
                  same_length=False, attn_type=0, clamp_len=-1,
                  sample_softmax=-1):
-        super(MemTransformerLM, self).__init__()
+        super(TensorizedTransformerLM, self).__init__()
         self.n_token = n_token
-
-        global initCore
-        # core_number = 2
-        # initCore = torch.ones(1, 40)
-        initCore1 = torch.rand(1, d_head)
-        initCore2 = F.softmax(torch.rand(1, d_head), dim=1)
-        initCore3 = torch.ones(1, d_head)
-        initCore = torch.cat((initCore1, initCore2, initCore3), dim=0)
 
         d_embed = d_model if d_embed is None else d_embed
         self.d_embed = d_embed
@@ -365,7 +329,7 @@ class MemTransformerLM(nn.Module):
         if attn_type == 0:  # the default attention
             for i in range(n_layer):
                 self.layers.append(
-                    RelPartialLearnableEncoderLayer(
+                    TensorizedDecoderLayer(
                         n_head, d_model, d_head, d_inner, dropout,
                         tgt_len=tgt_len, ext_len=ext_len, mem_len=mem_len,
                         dropatt=dropatt, pre_lnorm=pre_lnorm)
@@ -409,30 +373,19 @@ class MemTransformerLM(nn.Module):
             self.pos_emb = PositionalEmbedding(self.d_model)
             self.r_w_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
             self.r_r_bias = nn.Parameter(torch.Tensor(self.n_head, self.d_head))
-        elif self.attn_type == 1:  # learnable
-            self.r_emb = nn.Parameter(torch.Tensor(
-                self.n_layer, self.max_klen, self.n_head, self.d_head))
-            self.r_w_bias = nn.Parameter(torch.Tensor(
-                self.n_layer, self.n_head, self.d_head))
-            self.r_bias = nn.Parameter(torch.Tensor(
-                self.n_layer, self.max_klen, self.n_head))
-        elif self.attn_type == 2:  # absolute standard
-            self.pos_emb = PositionalEmbedding(self.d_model)
-        elif self.attn_type == 3:  # absolute deeper SA
-            self.r_emb = nn.Parameter(torch.Tensor(
-                self.n_layer, self.max_klen, self.n_head, self.d_head))
 
     def reset_length(self, tgt_len, ext_len, mem_len):
         self.tgt_len = tgt_len
         self.mem_len = mem_len
         self.ext_len = ext_len
 
-    def init_mems(self):
+    def init_mems(self, bsz):
         if self.mem_len > 0:
             mems = []
             param = next(self.parameters())
             for i in range(self.n_layer + 1):
-                empty = torch.empty(0, dtype=param.dtype, device=param.device)
+                # empty = torch.empty(0, dtype=param.dtype, device=param.device)
+                empty = torch.zeros([self.tgt_len, bsz, self.d_model], dtype=param.dtype, device=param.device)
                 mems.append(empty)
 
             return mems
@@ -480,8 +433,11 @@ class MemTransformerLM(nn.Module):
             dec_attn_mask = (torch.triu(all_ones, 1 + mlen)
                              + torch.tril(all_ones, -mask_shift_len)).byte()[:, :, None]  # -1
         else:
-            dec_attn_mask = torch.triu(
-                word_emb.new_ones(qlen, klen), diagonal=1 + mlen).byte()[:, :, None]
+            # dec_attn_mask = torch.triu(
+            #     word_emb.new_ones(qlen, klen), diagonal=1 + mlen).byte()[:, :, None]
+            dec_attn_mask_one = torch.triu(
+                torch.ones(qlen, qlen))
+            dec_attn_mask = torch.stack([dec_attn_mask_one for i in range(qlen)]).cuda().float()
 
         hids = []
         if self.attn_type == 0:  # default
@@ -513,7 +469,7 @@ class MemTransformerLM(nn.Module):
         # So, have to initialize size(0) mems inside the model forward.
         # Moreover, have to return new_mems to allow nn.DataParallel to piece
         # them together.
-        if not mems: mems = self.init_mems()
+        if not mems: mems = self.init_mems(data.size(-1))
 
         tgt_len = target.size(0)
         hidden, new_mems = self._forward(data, mems=mems)
@@ -532,57 +488,3 @@ class MemTransformerLM(nn.Module):
             return [loss]
         else:
             return [loss] + new_mems
-
-
-if __name__ == '__main__':
-    import argparse
-
-    parser = argparse.ArgumentParser(description='unit test')
-
-    parser.add_argument('--n_layer', type=int, default=4, help='')
-    parser.add_argument('--n_rel_layer', type=int, default=4, help='')
-    parser.add_argument('--n_head', type=int, default=2, help='')
-    parser.add_argument('--d_head', type=int, default=2, help='')
-    parser.add_argument('--d_model', type=int, default=200, help='')
-    parser.add_argument('--d_embed', type=int, default=200, help='')
-    parser.add_argument('--d_inner', type=int, default=200, help='')
-    parser.add_argument('--dropout', type=float, default=0.0, help='')
-    parser.add_argument('--cuda', action='store_true', help='')
-    parser.add_argument('--seed', type=int, default=1111, help='')
-    parser.add_argument('--multi_gpu', action='store_true', help='')
-
-    args = parser.parse_args()
-
-    device = torch.device("cuda" if args.cuda else "cpu")
-
-    B = 4
-    tgt_len, mem_len, ext_len = 36, 36, 0
-    data_len = tgt_len * 20
-    args.n_token = 10000
-
-    import data_utils
-
-    data = torch.LongTensor(data_len * B).random_(0, args.n_token).to(device)
-    diter = data_utils.LMOrderedIterator(data, B, tgt_len, device=device, ext_len=ext_len)
-
-    cutoffs = [args.n_token // 2]
-    tie_projs = [False] + [True] * len(cutoffs)
-
-    for div_val in [1, 2]:
-        for d_embed in [200, 100]:
-            model = MemTransformerLM(args.n_token, args.n_layer, args.n_head,
-                                     args.d_model, args.d_head, args.d_inner, args.dropout,
-                                     dropatt=args.dropout, tie_weight=True,
-                                     d_embed=d_embed, div_val=div_val,
-                                     tie_projs=tie_projs, pre_lnorm=True,
-                                     tgt_len=tgt_len, ext_len=ext_len, mem_len=mem_len,
-                                     cutoffs=cutoffs, attn_type=0).to(device)
-
-            print(sum(p.numel() for p in model.parameters()))
-
-            mems = tuple()
-            for idx, (inp, tgt, seqlen) in enumerate(diter):
-                print('batch {}'.format(idx))
-                out = model(inp, tgt, *mems)
-                mems = out[1:]
-
