@@ -212,17 +212,10 @@ class BlockTensorAttn(MultiLinearAttn):
         return output
 
 
-<<<<<<< HEAD:BTD-Transformer/transformer_upload.py
 class TensorizedDecoderLayer(nn.Module):
     def __init__(self, n_head, d_model, d_head, d_inner, dropout,
                  **kwargs):
         super(TensorizedDecoderLayer, self).__init__()
-=======
-class RelPartialLearnableEncoderLayer(nn.Module):
-    def __init__(self, n_head, d_model, d_head, d_inner, dropout,
-                 **kwargs):
-        super(RelPartialLearnableEncoderLayer, self).__init__()
->>>>>>> a1d1cff2fd583f14daa4e96e26d7faa3988ac9db:BTD-Transformer/mem_transformer.py
 
         self.dec_attn = BlockTensorAttn(n_head, d_model, d_head, dropout, **kwargs)
         self.pos_ff = PositionwiseFF(d_model, d_inner, dropout,
@@ -336,11 +329,7 @@ class TensorizedTransformerLM(nn.Module):
         if attn_type == 0:  # the default attention
             for i in range(n_layer):
                 self.layers.append(
-<<<<<<< HEAD:BTD-Transformer/transformer_upload.py
                     TensorizedDecoderLayer(
-=======
-                    RelPartialLearnableEncoderLayer(
->>>>>>> a1d1cff2fd583f14daa4e96e26d7faa3988ac9db:BTD-Transformer/mem_transformer.py
                         n_head, d_model, d_head, d_inner, dropout,
                         tgt_len=tgt_len, ext_len=ext_len, mem_len=mem_len,
                         dropatt=dropatt, pre_lnorm=pre_lnorm)
@@ -468,11 +457,7 @@ class TensorizedTransformerLM(nn.Module):
                 core_out = layer(core_out, pos_emb, self.r_w_bias,
                                  self.r_r_bias, dec_attn_mask=dec_attn_mask, mems=mems_i)
                 hids.append(core_out)
-<<<<<<< HEAD:BTD-Transformer/transformer_upload.py
 
-=======
-      
->>>>>>> a1d1cff2fd583f14daa4e96e26d7faa3988ac9db:BTD-Transformer/mem_transformer.py
         core_out = self.drop(core_out)
 
         new_mems = self._update_mems(hids, mems, mlen, qlen)
