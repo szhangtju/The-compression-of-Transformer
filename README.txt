@@ -11,3 +11,8 @@ PTB, Wiki-Text-103, One-Billion.
 
 ## Training and Evaluation
 
+if run Language Modeling Test in the case of one core, then
+bash run_(ptb/wt1o3).sh
+if run Language Modeling Test in the case of multiple core, then 
+first set the hyperparameter core_nums in the transformer_upload.py file to 2, then run the bash file.
+
