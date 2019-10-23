@@ -228,10 +228,11 @@ def weights_init(m):
         if hasattr(m, 'bias') and m.bias is not None:
             init_bias(m.bias)
 
-    # 初始化
+    # init
     elif classname.find('MultiHeadAttn') != -1:
         if hasattr(m, 'core_value'):
-            nn.init.normal_(m.core_value, 0.0, args.proj_init_std)
+            for i in range(m.core_nums):
+                nn.init.normal_(m.core_value[i], 0.0, args.proj_init_std)
 
     elif classname.find('AdaptiveEmbedding') != -1:
         if hasattr(m, 'emb_projs'):
