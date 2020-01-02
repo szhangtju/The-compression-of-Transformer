@@ -11,7 +11,7 @@ if [ $1 == 'train' ]; then
         --n_head 1 \
         --d_head 40 \
         --d_inner 2100 \
-        --dropout 0.1 \
+        --dropout 0.3 \
         --dropatt 0.0 \
         --optim adam \
         --lr 0.00025 \
